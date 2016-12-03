@@ -27,6 +27,7 @@ type Object interface {
 	ID() int
 	Update(x, y, vx, vy, state int)
 	Pos() Point
+	Radius() int
 }
 
 func ComputeDistance(o Object, objs []Object) []float64 {
@@ -89,20 +90,24 @@ func NewGameObject(id, radius int) *GameObject {
 	}
 }
 
-func (s *GameObject) ID() int {
-	return s.id
+func (obj *GameObject) ID() int {
+	return obj.id
 }
 
-func (s *GameObject) Update(x, y, vx, vy, state int) {
-	s.pos.x = x
-	s.pos.y = y
-	s.v.x = vx
-	s.v.y = vy
-	s.state = state
+func (obj *GameObject) Update(x, y, vx, vy, state int) {
+	obj.pos.x = x
+	obj.pos.y = y
+	obj.v.x = vx
+	obj.v.y = vy
+	obj.state = state
 }
 
-func (s *GameObject) Pos() Point {
-	return s.pos
+func (obj *GameObject) Pos() Point {
+	return obj.pos
+}
+
+func (obj *GameObject) Radius() int {
+	return obj.radius
 }
 
 type Wizard struct {
@@ -166,7 +171,14 @@ func (w *Wizard) Attack(snaffles []Object) string {
 }
 
 func (w *Wizard) Avoid(bludgers []Object) (string, bool) {
-	_ = ComputeDistance(w, bludgers)
+	dist := ComputeDistance(w, bludgers)
+	for i, d := range dist {
+		if d < float64(w.radius+bludgers[i].Radius()) {
+			// Compute cross product with rotation matrix.
+			// Or find another way to avoid bludger.
+			return "", true
+		}
+	}
 	return "", false
 }
 
