@@ -1,17 +1,26 @@
 package main
 
-import "fmt"
-import "sort"
-import "math"
-
-const (
-	MaxSnaffles     = 7
-	WizardPerPlayer = 2
+import (
+	"fmt"
+	"math"
+	"sort"
 )
 
-var goals = []Point{
-	{x: 0, y: 3750},
-	{x: 16000, y: 3750},
+const (
+	MaxSnaffles      = 7
+	WizardsPerPlayer = 2
+	RadiusWizard     = 400
+	RadiusSnaffle    = 150
+	RadiusBludger    = 200
+)
+
+var goals = struct {
+	scoreLeft bool
+	mine      Point
+	theirs    Point
+}{
+	mine:   Point{x: 0, y: 3750},
+	theirs: Point{x: 16000, y: 3750},
 }
 
 type Object interface {
@@ -20,11 +29,40 @@ type Object interface {
 	Pos() Point
 }
 
+func ComputeDistance(o Object, objs []Object) []float64 {
+	dist := make([]float64, len(objs))
+	a := o.Pos()
+	for i, oo := range objs {
+		b := oo.Pos()
+		x := float64((b.x - a.x) * (b.x - a.x))
+		y := float64((b.y - a.y) * (b.y - a.y))
+		dist[i] = math.Sqrt(x + y)
+	}
+	return dist
+}
+
+func RemoveFromSlice(o Object, src []Object) []Object {
+	dst := make([]Object, 0, len(src))
+	for _, oo := range src {
+		if o.ID() == oo.ID() {
+			continue
+		}
+		dst = append(dst, oo)
+	}
+	return dst
+}
+
 type ByX []Object
 
 func (a ByX) Len() int           { return len(a) }
 func (a ByX) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a ByX) Less(i, j int) bool { return a[i].Pos().x < a[j].Pos().x }
+
+type ByXDesc []Object
+
+func (a ByXDesc) Len() int           { return len(a) }
+func (a ByXDesc) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByXDesc) Less(i, j int) bool { return a[i].Pos().x > a[j].Pos().x }
 
 type Point struct {
 	x int
@@ -37,24 +75,17 @@ type Vector struct {
 }
 
 type GameObject struct {
-	id    int
-	pos   Point
-	v     Vector
-	state int
+	id     int
+	radius int
+	pos    Point
+	v      Vector
+	state  int
 }
 
-func NewGameObject(id, x, y, vx, vy, state int) *GameObject {
+func NewGameObject(id, radius int) *GameObject {
 	return &GameObject{
-		id: id,
-		pos: Point{
-			x: x,
-			y: y,
-		},
-		v: Vector{
-			x: vx,
-			y: vy,
-		},
-		state: state,
+		id:     id,
+		radius: radius,
 	}
 }
 
@@ -77,11 +108,12 @@ func (s *GameObject) Pos() Point {
 type Wizard struct {
 	*GameObject
 	hasSnaffle bool
+	target     Object
 }
 
-func NewWizard(obj *GameObject) *Wizard {
+func NewWizard(id int) *Wizard {
 	return &Wizard{
-		GameObject: obj,
+		GameObject: NewGameObject(id, RadiusWizard),
 	}
 }
 
@@ -93,121 +125,112 @@ func (w *Wizard) Update(x, y, vx, vy, state int) {
 	}
 }
 
-type Game struct {
-	objects   map[int]Object
-	snaffles  []Object
-	players   []Object
-	opponents []Object
-	scoreLeft bool
-	goals     struct {
-		mine   Point
-		theirs Point
-	}
-}
-
-func NewGame(teamID int) *Game {
-	g := &Game{
-		scoreLeft: false,
-		objects:   make(map[int]Object),
-	}
-	g.goals.mine = goals[0]
-	g.goals.theirs = goals[1]
-	if teamID == 1 {
-		g.scoreLeft = true
-		g.goals.theirs = goals[0]
-		g.goals.mine = goals[1]
-	}
-	return g
-}
-
-func (g *Game) Reset() {
-	g.snaffles = make([]Object, 0, MaxSnaffles)
-	g.players = make([]Object, 0, WizardPerPlayer)
-	g.opponents = make([]Object, 0, WizardPerPlayer)
-}
-
-func (g *Game) Update(id int, objType string, x, y, vx, vy, state int) {
-	obj, ok := g.objects[id]
-	if ok {
-		obj.Update(x, y, vx, vy, state)
-	}
-	switch objType {
-	case "WIZARD", "OPPONENT_WIZARD":
-		w, ok := obj.(*Wizard)
-		if !ok {
-			o := NewGameObject(id, x, y, vx, vy, state)
-			w = NewWizard(o)
-			g.objects[id] = w
-		}
-		if objType == "WIZARD" {
-			g.players = append(g.players, w)
-		} else {
-			g.opponents = append(g.opponents, w)
-		}
-	case "SNAFFLE":
-		o, ok := obj.(*GameObject)
-		if !ok {
-			o = NewGameObject(id, x, y, vx, vy, state)
-			g.objects[id] = o
-		}
-		g.snaffles = append(g.snaffles, o)
-	}
-}
-
-func (g *Game) ComputeDistance(o Object, objs []Object) []float64 {
-	dist := make([]float64, len(objs))
-	a := o.Pos()
-	for i, oo := range objs {
-		b := oo.Pos()
-		x := float64((b.x - a.x) * (b.x - a.x))
-		y := float64((b.y - a.y) * (b.y - a.y))
-		dist[i] = math.Sqrt(x + y)
-	}
-	return dist
-}
-
-func (g *Game) MoveDefender() {
-	power := 150
-	action := "MOVE"
-	w := g.players[0].(*Wizard)
-	p := g.snaffles[1].Pos()
-
+// Defend built a defensive action for the Wizard.
+func (w *Wizard) Defend(snaffles []Object) string {
+	w.target = nil
 	if w.hasSnaffle {
-		action = "THROW"
-		p = g.goals.theirs
-		power = 500
+		p := goals.theirs
+		return fmt.Sprintf("THROW %d %d 500", p.x, p.y)
 	}
 
-	fmt.Printf("%s %d %d %d\n", action, p.x, p.y, power)
+	if goals.scoreLeft {
+		sort.Sort(ByXDesc(snaffles))
+	} else {
+		sort.Sort(ByX(snaffles))
+	}
+
+	w.target = snaffles[0]
+	p := w.target.Pos()
+	return fmt.Sprintf("MOVE %d %d 150", p.x, p.y)
 }
 
-func (g *Game) MoveAttacker() {
-	p := g.goals.theirs
-	w := g.players[1].(*Wizard)
-
+// Attack built a agressive action for the Wizard.
+func (w *Wizard) Attack(snaffles []Object) string {
+	w.target = nil
+	p := goals.theirs
 	if w.hasSnaffle {
-		fmt.Printf("THROW %d %d 500\n", p.x, p.y)
-		return
+		return fmt.Sprintf("THROW %d %d 500", p.x, p.y)
 	}
 
-	dists := g.ComputeDistance(w, g.snaffles)
+	dists := ComputeDistance(w, snaffles)
 	min := 0
 	for i := 1; i < len(dists); i++ {
 		if dists[i] < dists[min] {
 			min = i
 		}
 	}
-	p = g.snaffles[min].Pos()
+	w.target = snaffles[min]
+	p = w.target.Pos()
 
-	fmt.Printf("MOVE %d %d 150\n", p.x, p.y)
+	return fmt.Sprintf("MOVE %d %d 150", p.x, p.y)
+}
+
+func (w *Wizard) Avoid(bludgers []Object) (string, bool) {
+	_ = ComputeDistance(w, bludgers)
+	return "", false
+}
+
+type Game struct {
+	objects   map[int]Object
+	snaffles  []Object
+	bludgers  []Object
+	players   []Object
+	opponents []Object
+}
+
+func NewGame() *Game {
+	g := &Game{
+		objects: make(map[int]Object),
+	}
+	return g
+}
+
+func (g *Game) Reset() {
+	g.snaffles = make([]Object, 0, MaxSnaffles)
+	g.players = make([]Object, 0, WizardsPerPlayer)
+	g.opponents = make([]Object, 0, WizardsPerPlayer)
+}
+
+func (g *Game) Update(id int, objType string, x, y, vx, vy, state int) {
+	obj, ok := g.objects[id]
+	switch objType {
+	case "WIZARD", "OPPONENT_WIZARD":
+		if !ok {
+			obj = NewWizard(id)
+			g.objects[id] = obj
+		}
+		if objType == "WIZARD" {
+			g.players = append(g.players, obj)
+		} else {
+			g.opponents = append(g.opponents, obj)
+		}
+	case "SNAFFLE":
+		if !ok {
+			obj = NewGameObject(id, RadiusSnaffle)
+			g.objects[id] = obj
+		}
+		g.snaffles = append(g.snaffles, obj)
+
+	case "BLUDGER":
+		if !ok {
+			obj = NewGameObject(id, RadiusSnaffle)
+			g.objects[id] = obj
+		}
+		g.bludgers = append(g.bludgers, obj)
+	}
+	obj.Update(x, y, vx, vy, state)
 }
 
 func main() {
 	// myTeamId: if 0 you need to score on the right of the map, if 1 you need to score on the left
 	var myTeamId int
 	fmt.Scan(&myTeamId)
+	if myTeamId == 1 {
+		goals.scoreLeft = true
+		goals.theirs, goals.mine = goals.mine, goals.theirs
+	}
 
-	game := NewGame(myTeamId)
+	game := NewGame()
 	for {
 		// entities: number of entities still in game
 		var entities int
@@ -230,11 +253,20 @@ func main() {
 		}
 
 		//fmt.Fprintf(os.Stderr, "%#v\n", game)
-		sort.Sort(ByX(game.snaffles))
 
 		// Edit this line to indicate the action for each wizard (0 <= thrust <= 150, 0 <= power <= 500)
 		// i.e.: "MOVE x y thrust" or "THROW x y power"
-		game.MoveDefender()
-		game.MoveAttacker()
+
+		snaffles := game.snaffles
+		w := game.players[0].(*Wizard)
+		action := w.Attack(snaffles)
+		if w.target != nil && len(snaffles) > 2 {
+			snaffles = RemoveFromSlice(w.target, snaffles)
+		}
+		fmt.Println(action)
+
+		w = game.players[1].(*Wizard)
+		action = w.Defend(snaffles)
+		fmt.Println(action)
 	}
 }
