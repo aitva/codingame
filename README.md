@@ -1,2 +1,3 @@
-# fantasticbits
-The CodingGame's Fantastic Bits
+# codingame
+This repo contains my solution to some puzzle of the CodinGame.
+
