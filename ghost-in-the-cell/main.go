@@ -171,42 +171,18 @@ func main() {
 			// fmt.Fprintf(os.Stderr, "idx: %#v\n", idx)
 			idx = idx[1:]
 
-			var neutral *factory
-			for _, i := range idx {
-				tmp := game.Factories[i]
-				if tmp.Faction == neutralFaction && tmp.Prod > 0 {
-					t := searchTroopDst(tmp.ID, playerFaction)
-					if t != -1 {
-						continue
-					}
-					neutral = tmp
-					break
-				}
-			}
-			if neutral != nil {
-				//cyborg := neutral.Cyborg + 1
-				cyborg := game.getDistance(f.ID, neutral.ID)*neutral.Prod + neutral.Cyborg + 1
-				action += fmt.Sprint(";MOVE ", f.ID, neutral.ID, cyborg)
+			closest := searchClosestFive(idx)
+			if closest == nil {
 				continue
 			}
-
-			var opponent *factory
-			for _, i := range idx {
-				tmp := game.Factories[i]
-				if tmp.Faction == opponentFaction && tmp.Prod > 0 {
-					t := searchTroopDst(tmp.ID, playerFaction)
-					if t != -1 {
-						continue
-					}
-					opponent = tmp
-					break
-				}
+			max := 2
+			if len(closest) < 2 {
+				max = len(closest)
 			}
-			if opponent != nil {
-				// cyborg := opponent.Cyborg + 1
-				cyborg := game.getDistance(f.ID, opponent.ID)*opponent.Prod + opponent.Cyborg + 1
-				action += fmt.Sprint(";MOVE ", f.ID, opponent.ID, cyborg)
-				continue
+			for _, c := range closest[:max] {
+				// cyborg := f.Prod + 1
+				cyborg := game.getDistance(f.ID, c.ID)*c.Prod + c.Cyborg + 1
+				action += fmt.Sprint(";MOVE ", f.ID, c.ID, cyborg)
 			}
 		}
 
