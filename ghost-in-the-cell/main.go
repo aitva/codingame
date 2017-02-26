@@ -1,9 +1,6 @@
 package main
 
-import (
-	"fmt"
-	"os"
-)
+import "fmt"
 
 //import "os"
 
@@ -16,7 +13,6 @@ const (
 	opponentFaction = -1
 	neutralFaction  = 0
 	playerFaction   = 1
-	maxDistance     = 20
 )
 
 var game Game
@@ -26,26 +22,7 @@ type factory struct {
 	Faction int
 	Cyborg  int
 	Prod    int
-}
-
-func (f *factory) findClosest(faction int) int {
-	row := game.Board[f.ID]
-	closest := -1
-	for i := range row {
-		if i == f.ID {
-			continue
-		}
-		f := game.Factories[i]
-		if f.Faction != faction {
-			continue
-		}
-		fmt.Fprintln(os.Stderr, "closest:", closest)
-		if !(closest == -1 || row[i] < row[closest]) {
-			continue
-		}
-		closest = i
-	}
-	return closest
+	Action  string
 }
 
 type troop struct {
@@ -74,6 +51,60 @@ func (g *Game) String() string {
 	return str
 }
 
+func (g *Game) getDistance(srcID, dstID int) int {
+	return g.Board[srcID][dstID]
+}
+
+func (g *Game) getDistances(ID int) []int {
+	return g.Board[ID]
+}
+
+func sortDistIdx(dist []int) []int {
+	tmp := make([]int, len(dist))
+	copy(tmp, dist)
+	idx := make([]int, len(tmp))
+	for i := range idx {
+		iMin := 0
+		for j := range tmp {
+			if tmp[iMin] == -1 {
+				iMin = j
+				continue
+			}
+			if tmp[j] >= 0 && tmp[j] < tmp[iMin] {
+				iMin = j
+			}
+		}
+		tmp[iMin] = -1
+		idx[i] = iMin
+	}
+	return idx
+}
+
+func searchTroopDst(id, faction int) int {
+	for _, t := range game.Troops {
+		if t.Faction == faction && t.Dst == id {
+			return t.ID
+		}
+	}
+	return -1
+}
+
+func searchClosestFive(idx []int) []*factory {
+	closest := make([]*factory, 0, 5)
+	for _, i := range idx {
+		tmp := game.Factories[i]
+		if tmp.Faction != playerFaction && tmp.Prod > 0 {
+			t := searchTroopDst(tmp.ID, playerFaction)
+			if t != -1 {
+				continue
+			}
+			closest = append(closest, tmp)
+			break
+		}
+	}
+	return closest
+}
+
 func main() {
 	// factoryCount: the number of factories
 	var factoryCount int
@@ -94,13 +125,13 @@ func main() {
 		game.Board[factory2][factory1] = distance
 	}
 
-	game.Troops = make(map[int]*troop)
-	game.Factories = make(map[int]*factory)
 	for {
 		// entityCount: the number of entities (e.g. factories and troops)
 		var entityCount int
 		fmt.Scan(&entityCount)
 
+		game.Troops = make(map[int]*troop)
+		game.Factories = make(map[int]*factory)
 		for i := 0; i < entityCount; i++ {
 			var entityId int
 			var entityType string
@@ -127,22 +158,56 @@ func main() {
 			}
 		}
 
-		fmt.Fprintln(os.Stderr, game)
+		//fmt.Fprintln(os.Stderr, &game)
 
 		action := "WAIT"
 		for _, f := range game.Factories {
 			if f.Faction != playerFaction {
 				continue
 			}
-			id := f.findClosest(neutralFaction)
-			if id == -1 {
+			dist := game.getDistances(f.ID)
+			// fmt.Fprintf(os.Stderr, "dist: %#v\n", dist)
+			idx := sortDistIdx(dist)
+			// fmt.Fprintf(os.Stderr, "idx: %#v\n", idx)
+			idx = idx[1:]
+
+			var neutral *factory
+			for _, i := range idx {
+				tmp := game.Factories[i]
+				if tmp.Faction == neutralFaction && tmp.Prod > 0 {
+					t := searchTroopDst(tmp.ID, playerFaction)
+					if t != -1 {
+						continue
+					}
+					neutral = tmp
+					break
+				}
+			}
+			if neutral != nil {
+				//cyborg := neutral.Cyborg + 1
+				cyborg := game.getDistance(f.ID, neutral.ID)*neutral.Prod + neutral.Cyborg + 1
+				action += fmt.Sprint(";MOVE ", f.ID, neutral.ID, cyborg)
 				continue
 			}
-			dst := game.Factories[id]
-			if dst.Cyborg > f.Cyborg {
+
+			var opponent *factory
+			for _, i := range idx {
+				tmp := game.Factories[i]
+				if tmp.Faction == opponentFaction && tmp.Prod > 0 {
+					t := searchTroopDst(tmp.ID, playerFaction)
+					if t != -1 {
+						continue
+					}
+					opponent = tmp
+					break
+				}
+			}
+			if opponent != nil {
+				// cyborg := opponent.Cyborg + 1
+				cyborg := game.getDistance(f.ID, opponent.ID)*opponent.Prod + opponent.Cyborg + 1
+				action += fmt.Sprint(";MOVE ", f.ID, opponent.ID, cyborg)
 				continue
 			}
-			action = fmt.Sprintf("MOVE %d %d %d", f.ID, dst.ID, dst.Cyborg+1)
 		}
 
 		// Any valid action, such as "WAIT" or "MOVE source destination cyborgs"
