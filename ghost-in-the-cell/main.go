@@ -35,9 +35,10 @@ type troop struct {
 }
 
 type Game struct {
-	Board     [][]int
-	Factories map[int]*factory
-	Troops    map[int]*troop
+	Board      [][]int
+	Factories  map[int]*factory
+	TroopMaxID int
+	Troops     map[int]*troop
 }
 
 func (g *Game) String() string {
@@ -147,6 +148,7 @@ func main() {
 					Turns:   arg5,
 				}
 				game.Troops[t.ID] = t
+				game.TroopMaxID = t.ID
 			} else if entityType == "FACTORY" {
 				f := &factory{
 					ID:      entityId,
@@ -175,14 +177,14 @@ func main() {
 			if closest == nil {
 				continue
 			}
-			max := 2
-			if len(closest) < 2 {
-				max = len(closest)
-			}
-			for _, c := range closest[:max] {
+			for _, c := range closest {
 				// cyborg := f.Prod + 1
-				cyborg := game.getDistance(f.ID, c.ID)*c.Prod + c.Cyborg + 1
-				action += fmt.Sprint(";MOVE ", f.ID, c.ID, cyborg)
+				turns := game.getDistance(f.ID, c.ID)
+				cyborg := turns*c.Prod + c.Cyborg + 5
+				if cyborg <= f.Cyborg {
+					action += fmt.Sprint(";MOVE ", f.ID, c.ID, cyborg)
+					f.Cyborg -= cyborg
+				}
 			}
 		}
 
