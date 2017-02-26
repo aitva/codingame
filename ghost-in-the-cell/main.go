@@ -1,13 +1,9 @@
 package main
 
-import "fmt"
-
-//import "os"
-
-/***
- * Auto-generated code below aims at helping you parse
- * the standard input according to the problem statement.
-***/
+import (
+	"fmt"
+	"os"
+)
 
 const (
 	opponentFaction = -1
@@ -23,6 +19,10 @@ type factory struct {
 	Cyborg  int
 	Prod    int
 	Action  string
+}
+
+func (f *factory) String() string {
+	return fmt.Sprintf("{ID: %d}", f.ID)
 }
 
 type troop struct {
@@ -91,16 +91,17 @@ func searchTroopDst(id, faction int) int {
 }
 
 func searchClosestFive(idx []int) []*factory {
-	closest := make([]*factory, 0, 5)
-	for _, i := range idx {
-		tmp := game.Factories[i]
+	const max = 5
+	closest := make([]*factory, 0, max)
+	for i := 0; i < len(idx) && len(closest) < 5; i++ {
+		id := idx[i]
+		tmp := game.Factories[id]
 		if tmp.Faction != playerFaction && tmp.Prod > 0 {
 			t := searchTroopDst(tmp.ID, playerFaction)
 			if t != -1 {
 				continue
 			}
 			closest = append(closest, tmp)
-			break
 		}
 	}
 	return closest
@@ -159,10 +160,9 @@ func main() {
 				game.Factories[f.ID] = f
 			}
 		}
-
 		//fmt.Fprintln(os.Stderr, &game)
 
-		action := "WAIT"
+		action := ""
 		for _, f := range game.Factories {
 			if f.Faction != playerFaction {
 				continue
@@ -177,15 +177,34 @@ func main() {
 			if closest == nil {
 				continue
 			}
+			fmt.Fprintf(os.Stderr, "closest: %v\n", closest)
 			for _, c := range closest {
-				// cyborg := f.Prod + 1
 				turns := game.getDistance(f.ID, c.ID)
-				cyborg := turns*c.Prod + c.Cyborg + 5
+				if c.Faction == neutralFaction {
+					turns = 0
+				}
+				cyborg := turns*c.Prod + c.Cyborg + 1
+				//fmt.Fprintf(os.Stderr, "cyborg = %v*%v + %v + 1\n", turns, c.Prod, c.Cyborg)
+				fmt.Fprintf(os.Stderr, "cyborg(%d) <= f.Cyborg(%d)\n", cyborg, f.Cyborg)
 				if cyborg <= f.Cyborg {
-					action += fmt.Sprint(";MOVE ", f.ID, c.ID, cyborg)
+					action += fmt.Sprint("MOVE ", f.ID, c.ID, cyborg, ";")
 					f.Cyborg -= cyborg
+					game.TroopMaxID++
+					game.Troops[game.TroopMaxID] = &troop{
+						ID:      game.TroopMaxID,
+						Faction: playerFaction,
+						Src:     f.ID,
+						Dst:     c.ID,
+						Cyborg:  cyborg,
+						Turns:   turns,
+					}
 				}
 			}
+		}
+		if action != "" {
+			action = action[:len(action)-1]
+		} else {
+			action = "WAIT"
 		}
 
 		// Any valid action, such as "WAIT" or "MOVE source destination cyborgs"
