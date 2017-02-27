@@ -1,11 +1,13 @@
 package main
 
 import "fmt"
+import "os"
 
 const (
-	opponentFaction = -1
-	neutralFaction  = 0
-	playerFaction   = 1
+	opponentFaction  = -1
+	neutralFaction   = 0
+	playerFaction    = 1
+	closestNeighboor = 4
 )
 
 var game Game
@@ -16,11 +18,11 @@ type factory struct {
 	Cyborg  int
 	Prod    int
 	Action  string
-	Damage  int
+	Coef    int
 }
 
 func (f *factory) String() string {
-	return fmt.Sprintf("{ID: %d, Fac: %d}", f.ID, f.Faction)
+	return fmt.Sprintf("{ID: %d, Coef: %d}", f.ID, f.Coef)
 }
 
 type troop struct {
@@ -104,31 +106,6 @@ func computeActualCyborg(id int) int {
 	return cyborg
 }
 
-// searchTopFive look for top 5 factories.
-// If opponent or neutral: filter on positive prod & no bro shooting.
-// If bro filter on ennemy shooting.
-func searchTopFive(idx []int) []*factory {
-	const max = 5
-	closest := make([]*factory, 0, max)
-	for i := 0; i < len(idx) && len(closest) < 5; i++ {
-		id := idx[i]
-		tmp := game.Factories[id]
-		faction := playerFaction
-		if tmp.Prod < 1 {
-			continue
-		}
-		if tmp.Faction == playerFaction {
-			faction = opponentFaction
-		}
-		t := searchTroopDst(tmp.ID, faction)
-		if t != -1 {
-			continue
-		}
-		closest = append(closest, tmp)
-	}
-	return closest
-}
-
 // searchFiveOpponent look for 5 factories (neutral or opponent).
 // It is filtering on positive prod & no bro shooting.
 func searchFiveOpponent(idx []int) []*factory {
@@ -146,6 +123,14 @@ func searchFiveOpponent(idx []int) []*factory {
 		}
 	}
 	return closest
+}
+
+func computeTroopSize(src, dst *factory) int {
+	turns := game.getDistance(src.ID, dst.ID)
+	if dst.Faction == neutralFaction {
+		turns = 0
+	}
+	return turns*dst.Prod + dst.Cyborg + 3
 }
 
 func main() {
@@ -203,49 +188,65 @@ func main() {
 		}
 		//fmt.Fprintln(os.Stderr, &game)
 
+		// Compute factories coeficients.
+		for _, f := range game.Factories {
+			if f.Faction == opponentFaction {
+				f.Coef = -1
+			} else if f.Faction == playerFaction {
+				f.Coef = +1
+			} else {
+				continue
+			}
+
+			dist := game.getDistances(f.ID)
+			idx := sortDistIdx(dist)
+			for _, id := range idx[1 : closestNeighboor+1] {
+				closest := game.Factories[id]
+				closest.Coef += f.Coef
+			}
+		}
+
 		action := ""
 		for _, f := range game.Factories {
 			if f.Faction != playerFaction {
 				continue
 			}
 			dist := game.getDistances(f.ID)
-			// fmt.Fprintf(os.Stderr, "dist: %#v\n", dist)
 			idx := sortDistIdx(dist)
-			// fmt.Fprintf(os.Stderr, "idx: %#v\n", idx)
-			idx = idx[1:]
 
-			// fmt.Fprintf(os.Stderr, "player: %v\n", f)
-			top := searchFiveOpponent(idx)
-			// fmt.Fprintf(os.Stderr, "opponents: %v\n", top)
-			if top == nil {
-				continue
+			// Get target factories.
+			targets := make([]*factory, closestNeighboor)
+			for i, id := range idx[1 : len(targets)+1] {
+				targets[i] = game.Factories[id]
 			}
-			for _, o := range top {
-				turns := game.getDistance(f.ID, o.ID)
-				if o.Faction == neutralFaction {
-					turns = 0
-				}
-				cyborg := turns*o.Prod + o.Cyborg + 1
-				actualCyborg := computeActualCyborg(f.ID)
-				// fmt.Fprintf(os.Stderr, "cyborg(%d) <= f.Cyborg(%d)\n", cyborg, f.Cyborg)
-				if cyborg <= actualCyborg {
-					action += fmt.Sprint("MOVE ", f.ID, o.ID, cyborg, ";")
-					f.Cyborg -= cyborg
-					// Avoid duplicate troops.
-					game.TroopMaxID++
-					game.Troops[game.TroopMaxID] = &troop{
-						ID:      game.TroopMaxID,
-						Faction: playerFaction,
-						Src:     f.ID,
-						Dst:     o.ID,
-						Cyborg:  cyborg,
-						Turns:   turns,
+
+			// Order by coef.
+			for i := range targets {
+				for j := range targets {
+					if targets[i].Coef < targets[j].Coef {
+						targets[j], targets[i] = targets[i], targets[j]
 					}
 				}
 			}
+			fmt.Fprintln(os.Stderr, targets)
+
+			// Choose an action.
+			for _, t := range targets {
+				if t.Faction == playerFaction {
+					action += fmt.Sprintf("MOVE %d %d %d; ", f.ID, t.ID, f.Prod)
+					f.Cyborg -= f.Prod
+					break
+				}
+				cyborg := computeTroopSize(f, t)
+				if f.Cyborg < cyborg {
+					continue
+				}
+				action += fmt.Sprintf("MOVE %d %d %d; ", f.ID, t.ID, cyborg)
+				f.Cyborg -= cyborg
+			}
 		}
 		if action != "" {
-			action = action[:len(action)-1]
+			action = action[:len(action)-2]
 		} else {
 			action = "WAIT"
 		}
