@@ -1,9 +1,6 @@
 package main
 
-import (
-	"fmt"
-	"os"
-)
+import "fmt"
 
 const (
 	opponentFaction = -1
@@ -19,10 +16,11 @@ type factory struct {
 	Cyborg  int
 	Prod    int
 	Action  string
+	Damage  int
 }
 
 func (f *factory) String() string {
-	return fmt.Sprintf("{ID: %d}", f.ID)
+	return fmt.Sprintf("{ID: %d, Fac: %d}", f.ID, f.Faction)
 }
 
 type troop struct {
@@ -81,6 +79,7 @@ func sortDistIdx(dist []int) []int {
 	return idx
 }
 
+// searchTroopDst return the index of a faction shooting on id.
 func searchTroopDst(id, faction int) int {
 	for _, t := range game.Troops {
 		if t.Faction == faction && t.Dst == id {
@@ -90,7 +89,49 @@ func searchTroopDst(id, faction int) int {
 	return -1
 }
 
-func searchClosestFive(idx []int) []*factory {
+func computeActualCyborg(id int) int {
+	cyborg := game.Factories[id].Cyborg
+	for _, t := range game.Troops {
+		if t.Dst != id {
+			continue
+		}
+		if t.Faction == opponentFaction {
+			cyborg -= t.Cyborg
+		} else if t.Faction == playerFaction {
+			cyborg += t.Cyborg
+		}
+	}
+	return cyborg
+}
+
+// searchTopFive look for top 5 factories.
+// If opponent or neutral: filter on positive prod & no bro shooting.
+// If bro filter on ennemy shooting.
+func searchTopFive(idx []int) []*factory {
+	const max = 5
+	closest := make([]*factory, 0, max)
+	for i := 0; i < len(idx) && len(closest) < 5; i++ {
+		id := idx[i]
+		tmp := game.Factories[id]
+		faction := playerFaction
+		if tmp.Prod < 1 {
+			continue
+		}
+		if tmp.Faction == playerFaction {
+			faction = opponentFaction
+		}
+		t := searchTroopDst(tmp.ID, faction)
+		if t != -1 {
+			continue
+		}
+		closest = append(closest, tmp)
+	}
+	return closest
+}
+
+// searchFiveOpponent look for 5 factories (neutral or opponent).
+// It is filtering on positive prod & no bro shooting.
+func searchFiveOpponent(idx []int) []*factory {
 	const max = 5
 	closest := make([]*factory, 0, max)
 	for i := 0; i < len(idx) && len(closest) < 5; i++ {
@@ -173,28 +214,30 @@ func main() {
 			// fmt.Fprintf(os.Stderr, "idx: %#v\n", idx)
 			idx = idx[1:]
 
-			closest := searchClosestFive(idx)
-			if closest == nil {
+			// fmt.Fprintf(os.Stderr, "player: %v\n", f)
+			top := searchFiveOpponent(idx)
+			// fmt.Fprintf(os.Stderr, "opponents: %v\n", top)
+			if top == nil {
 				continue
 			}
-			fmt.Fprintf(os.Stderr, "closest: %v\n", closest)
-			for _, c := range closest {
-				turns := game.getDistance(f.ID, c.ID)
-				if c.Faction == neutralFaction {
+			for _, o := range top {
+				turns := game.getDistance(f.ID, o.ID)
+				if o.Faction == neutralFaction {
 					turns = 0
 				}
-				cyborg := turns*c.Prod + c.Cyborg + 1
-				//fmt.Fprintf(os.Stderr, "cyborg = %v*%v + %v + 1\n", turns, c.Prod, c.Cyborg)
-				fmt.Fprintf(os.Stderr, "cyborg(%d) <= f.Cyborg(%d)\n", cyborg, f.Cyborg)
-				if cyborg <= f.Cyborg {
-					action += fmt.Sprint("MOVE ", f.ID, c.ID, cyborg, ";")
+				cyborg := turns*o.Prod + o.Cyborg + 1
+				actualCyborg := computeActualCyborg(f.ID)
+				// fmt.Fprintf(os.Stderr, "cyborg(%d) <= f.Cyborg(%d)\n", cyborg, f.Cyborg)
+				if cyborg <= actualCyborg {
+					action += fmt.Sprint("MOVE ", f.ID, o.ID, cyborg, ";")
 					f.Cyborg -= cyborg
+					// Avoid duplicate troops.
 					game.TroopMaxID++
 					game.Troops[game.TroopMaxID] = &troop{
 						ID:      game.TroopMaxID,
 						Faction: playerFaction,
 						Src:     f.ID,
-						Dst:     c.ID,
+						Dst:     o.ID,
 						Cyborg:  cyborg,
 						Turns:   turns,
 					}
