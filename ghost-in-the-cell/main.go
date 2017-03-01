@@ -12,6 +12,7 @@ const (
 	closestNeighboor = 5
 	maxDistance      = 21
 	invalidPath      = -1
+	bombTime         = 5
 )
 
 var game Game
@@ -44,11 +45,16 @@ type path struct {
 }
 
 type Game struct {
-	Board        [][]int
+	Board [][]int
+	Bomb  struct {
+		Count int
+		Timer int
+	}
 	FactoryCount int
 	Factories    map[int]*factory
 	TroopMaxID   int
 	Troops       map[int]*troop
+	Turn         int
 	Path         []path
 }
 
@@ -148,6 +154,17 @@ func searchTroopDst(id, faction int) int {
 	return -1
 }
 
+func searchTroop(src, dst int) int {
+	s := game.Factories[src]
+	d := game.Factories[dst]
+	for _, t := range game.Troops {
+		if t.Src == s.ID && t.Dst == d.ID {
+			return t.ID
+		}
+	}
+	return -1
+}
+
 // upateCyborgs compute number of cyborgs in all factories
 // once all the troops reach destination.
 func upateCyborgs() {
@@ -161,23 +178,34 @@ func upateCyborgs() {
 	}
 }
 
-func searchBestShots() []*factory {
+func searchBestShots(src *factory) []*factory {
 	// Get target factories.
 	targets := make([]*factory, 0, game.FactoryCount)
 	for _, f := range game.Factories {
-		if f.Prod < 1 || (f.Faction == playerFaction && f.Cyborg > 1) {
+		if f.Prod < 1 {
 			continue
 		}
 		if f.Faction == opponentFaction && f.Cyborg < 0 {
 			continue
 		}
+		if f.Faction == playerFaction && f.Cyborg >= 0 {
+			continue
+		}
+		if f.Faction != playerFaction && f.Cyborg < 0 {
+			continue
+		}
 		targets = append(targets, f)
 	}
 
-	// Order by prod.
+	// Order by faction, prod, dist.
+	dist := game.Path[src.ID].Dist
 	for i := range targets {
 		for j := range targets[i:] {
-			if targets[i].Prod < targets[j].Prod {
+			swap := false
+			swap = swap || dist[targets[i].ID] < dist[targets[j].ID]
+			swap = swap || targets[i].Prod > targets[j].Prod
+			//swap = swap || targets[i].Faction == opponentFaction
+			if swap {
 				targets[j], targets[i] = targets[i], targets[j]
 			}
 		}
@@ -220,6 +248,7 @@ func main() {
 	fmt.Scan(&factoryCount)
 	game.FactoryCount = factoryCount
 	game.Board = new2DSlice(factoryCount, factoryCount)
+	game.Bomb.Count = 2
 
 	// linkCount: the number of links between factories
 	var linkCount int
@@ -281,8 +310,30 @@ func main() {
 		}
 
 		action := ""
-		targets := searchBestShots()
-		fmt.Fprintln(os.Stderr, "targets:", targets)
+		if game.Bomb.Timer <= 0 && game.Bomb.Count > 0 {
+			target := -1
+			for id, f := range game.Factories {
+				found := target == -1
+				found = found || f.Prod > game.Factories[target].Prod
+				found = found && f.Faction == opponentFaction
+				if found {
+					target = id
+				}
+			}
+			row := game.Board[target]
+			factory := -1
+			for i := range row {
+				found := factory == -1
+				found = found || row[i] < row[factory]
+				found = found && game.Factories[i].Faction == playerFaction
+				if found {
+					factory = i
+				}
+			}
+			game.Bomb.Timer = bombTime + row[factory]
+			action = fmt.Sprintf("BOMB %d %d; ", factory, target)
+			game.Bomb.Count--
+		}
 		for _, f := range game.Factories {
 			if f.Faction != playerFaction {
 				continue
@@ -291,24 +342,37 @@ func main() {
 			if f.Cyborg <= 0 {
 				continue
 			}
-			if f.Cyborg > 15 && f.Prod < 3 {
+			if f.Cyborg > 15 && f.Prod >= 1 && f.Prod < 3 {
 				action += fmt.Sprintf("INC %d; ", f.ID)
 				continue
 			}
 
 			// Choose an action.
+			targets := searchBestShots(f)
+			fmt.Fprintln(os.Stderr, "f:", f, "targets:", targets)
 			for _, t := range targets {
 				if t.ID == f.ID {
 					continue
 				}
+				// fmt.Fprintln(os.Stderr, "prev:", game.Path[f.ID].Prev, "t.ID:", t.ID)
 				path := pathToDst(game.Path[f.ID].Prev, t.ID)
 				fmt.Fprintln(os.Stderr, "path:", path)
-				cyborg := computeTroopSize(path, f)
-				fmt.Fprintf(os.Stderr, "t: %v; f: %v; cyborg: %d\n", t, f, cyborg)
+				// cyborg := computeTroopSize(path, f)
+				cyborg := f.Cyborg
+				fmt.Fprintf(os.Stderr, "f: %v; t: %v; cyborg: %d\n", f, t, cyborg)
 				if cyborg == 0 {
 					continue
 				}
 				action += fmt.Sprintf("MOVE %d %d %d; ", f.ID, path[0], cyborg)
+				game.TroopMaxID++
+				game.Troops[game.TroopMaxID] = &troop{
+					ID:      game.TroopMaxID,
+					Faction: playerFaction,
+					Cyborg:  cyborg,
+					Src:     f.ID,
+					Dst:     t.ID,
+					Turns:   game.Path[f.ID].Dist[path[0]],
+				}
 				f.Cyborg -= cyborg
 				break
 			}
@@ -321,5 +385,7 @@ func main() {
 
 		// Any valid action, such as "WAIT" or "MOVE source destination cyborgs"
 		fmt.Println(action)
+		game.Turn++
+		game.Bomb.Timer--
 	}
 }
