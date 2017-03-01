@@ -111,6 +111,18 @@ func dijkstra(src int) (dist, prev []int) {
 	return
 }
 
+func pathToDst(prev []int, dst int) []int {
+	path := make([]int, len(prev))
+	i := dst
+	j := len(prev) - 1
+	for prev[i] != invalidPath {
+		path[j] = i
+		i = prev[i]
+		j--
+	}
+	return path[j+1:]
+}
+
 func sortIndex(dist []int) []int {
 	ids := make([]int, len(dist))
 	for i := range ids {
@@ -156,8 +168,7 @@ func searchBestShots() []*factory {
 		if f.Prod < 1 || (f.Faction == playerFaction && f.Cyborg > 1) {
 			continue
 		}
-		i := searchTroopDst(f.ID, playerFaction)
-		if i != -1 {
+		if f.Faction == opponentFaction && f.Cyborg < 0 {
 			continue
 		}
 		targets = append(targets, f)
@@ -175,17 +186,30 @@ func searchBestShots() []*factory {
 	return targets
 }
 
-func computeTroopSize(src, dst *factory) int {
-	cyborg := dst.Cyborg + 1
-	if cyborg < 0 {
-		cyborg = (cyborg - 2) * -1
-	}
-	if dst.Faction == opponentFaction {
-		turns := game.getDistance(src.ID, dst.ID)
-		cyborg += turns * dst.Prod
-	}
-	if src.Cyborg-dst.Cyborg <= 0 {
-		cyborg = src.Cyborg - 1
+func computeTroopSize(path []int, src *factory) int {
+	cyborg := 0
+	for _, id := range path {
+		dst := game.Factories[id]
+		// We don't add unit to take our own faction.
+		if dst.Faction == playerFaction {
+			continue
+		}
+		// Minimum amount for neutralFaction.
+		tmp := dst.Cyborg + 1
+		if tmp < 0 {
+			// Might be negative if ennemy troops are moving.
+			tmp = (tmp - 2) * -1
+		}
+		if dst.Faction == opponentFaction {
+			// TODO: use dijkstra instead
+			turns := game.getDistance(src.ID, dst.ID)
+			tmp += turns * dst.Prod
+		}
+		if src.Cyborg-cyborg-tmp <= 0 {
+			cyborg = src.Cyborg - 1
+			break
+		}
+		cyborg += tmp
 	}
 	return cyborg
 }
@@ -264,6 +288,9 @@ func main() {
 				continue
 			}
 			upateCyborgs() // To improve shot.
+			if f.Cyborg <= 0 {
+				continue
+			}
 			if f.Cyborg > 15 && f.Prod < 3 {
 				action += fmt.Sprintf("INC %d; ", f.ID)
 				continue
@@ -274,9 +301,14 @@ func main() {
 				if t.ID == f.ID {
 					continue
 				}
-				cyborg := computeTroopSize(f, t)
-				fmt.Fprintf(os.Stderr, "t: %v; f: %d; cyborg: %d\n", t, f, cyborg)
-				action += fmt.Sprintf("MOVE %d %d %d; ", f.ID, t.ID, cyborg)
+				path := pathToDst(game.Path[f.ID].Prev, t.ID)
+				fmt.Fprintln(os.Stderr, "path:", path)
+				cyborg := computeTroopSize(path, f)
+				fmt.Fprintf(os.Stderr, "t: %v; f: %v; cyborg: %d\n", t, f, cyborg)
+				if cyborg == 0 {
+					continue
+				}
+				action += fmt.Sprintf("MOVE %d %d %d; ", f.ID, path[0], cyborg)
 				f.Cyborg -= cyborg
 				break
 			}
