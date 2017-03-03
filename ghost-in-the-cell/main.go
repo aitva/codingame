@@ -23,11 +23,22 @@ type factory struct {
 	Faction int
 	Cyborg  int
 	Prod    int
-	Coef    int
+	Troops  struct {
+		Player   int
+		Opponent int
+	}
 }
 
 func (f *factory) String() string {
-	return fmt.Sprintf("{ID: %d, Fa: %d}", f.ID, f.Faction)
+	return fmt.Sprintf("{ID: %d, Fa: %d, Cy: %d}", f.ID, f.Faction, f.Cyborg)
+}
+
+func (f *factory) EstimatedCyborg() int {
+	cyborg := f.Cyborg - f.Troops.Player + f.Troops.Opponent
+	if f.Faction == playerFaction {
+		cyborg = f.Cyborg + f.Troops.Player - f.Troops.Opponent
+	}
+	return cyborg
 }
 
 type troop struct {
@@ -143,15 +154,15 @@ func sortIndex(dist []int) []int {
 	return ids
 }
 
-// upateCyborgs compute number of cyborgs in all factories
+// upateTroops compute number of cyborgs in all factories
 // once all the troops reach destination.
-func upateCyborgs() {
+func upateTroops() {
 	for _, t := range game.Troops {
 		f := game.Factories[t.Dst]
-		if f.Faction == t.Faction {
-			f.Cyborg += t.Cyborg
-		} else if f.Faction != t.Faction {
-			f.Cyborg -= t.Cyborg
+		if t.Faction == opponentFaction {
+			f.Troops.Opponent += t.Cyborg
+		} else if t.Faction == playerFaction {
+			f.Troops.Player += t.Cyborg
 		}
 	}
 }
@@ -159,20 +170,22 @@ func upateCyborgs() {
 func searchBestShots(src *factory) []*factory {
 	// Get target factories.
 	targets := make([]*factory, 0, game.FactoryCount)
-	for _, f := range game.Factories {
-		if f.Prod < 1 {
-			continue
-		}
-		if f.Faction == opponentFaction && f.Cyborg < 0 {
-			continue
-		}
-		if f.Faction == playerFaction && f.Cyborg >= 0 {
-			continue
-		}
-		if f.Faction != playerFaction && f.Cyborg < 0 {
+	for _, f := range game.NeutralF {
+		if f.Prod < 1 || f.Cyborg-f.Troops.Player < 0 {
 			continue
 		}
 		targets = append(targets, f)
+	}
+
+	for _, f := range game.PlayerF {
+		if f.Prod < 1 || f.EstimatedCyborg() >= 0 {
+			continue
+		}
+		targets = append(targets, f)
+	}
+
+	if len(targets) == 0 {
+		targets = append(targets, game.OpponentF...)
 	}
 
 	// Order by faction, prod, dist.
@@ -228,6 +241,9 @@ func main() {
 
 		game.Troops = make(map[int]*troop)
 		game.Factories = make(map[int]*factory)
+		game.NeutralF = make([]*factory, 0, game.FactoryCount)
+		game.PlayerF = make([]*factory, 0, game.FactoryCount)
+		game.OpponentF = make([]*factory, 0, game.FactoryCount)
 		for i := 0; i < entityCount; i++ {
 			var entityID int
 			var entityType string
@@ -252,7 +268,7 @@ func main() {
 					Prod:    arg3,
 				}
 				game.Factories[f.ID] = f
-				if f.Faction == neutralFaction {
+				if f.Faction == neutralFaction && f.Prod > 0 {
 					game.NeutralF = append(game.NeutralF, f)
 				} else if f.Faction == playerFaction {
 					game.PlayerF = append(game.PlayerF, f)
@@ -261,6 +277,7 @@ func main() {
 				}
 			}
 		}
+		upateTroops()
 
 		action := ""
 		// Throw bomb one at a time.
@@ -272,28 +289,24 @@ func main() {
 				}
 			}
 			row := game.Board[target.ID]
-			closest := -1
-			for i := range row {
-				found := closest == -1
-				found = found || row[i] < row[closest]
-				found = found && game.Factories[i].Faction == playerFaction
-				if found {
-					closest = i
+			var src *factory
+			for id, f := range game.PlayerF {
+				if src == nil || row[id] < row[src.ID] {
+					src = f
 				}
 			}
-			game.Bomb.Timer = bombTime + row[closest]
-			action = fmt.Sprintf("BOMB %d %d; ", closest, target.ID)
+			game.Bomb.Timer = bombTime + row[src.ID]
+			action = fmt.Sprintf("BOMB %d %d; ", src.ID, target.ID)
 			game.Bomb.Count--
 		}
 		for _, f := range game.Factories {
 			if f.Faction != playerFaction {
 				continue
 			}
-			upateCyborgs() // To improve shot.
-			if f.Cyborg <= 0 {
+			if f.EstimatedCyborg() <= 0 {
 				continue
 			}
-			if len(game.NeutralF) == 0 && f.Cyborg > 15 && f.Prod >= 1 && f.Prod < 3 {
+			if len(game.NeutralF) == 0 && f.Troops.Opponent == 0 && f.Cyborg > 15 && f.Prod >= 1 && f.Prod < 3 {
 				action += fmt.Sprintf("INC %d; ", f.ID)
 				continue
 			}
@@ -315,16 +328,12 @@ func main() {
 				if cyborg == 0 {
 					continue
 				}
-				action += fmt.Sprintf("MOVE %d %d %d; ", f.ID, path[0], cyborg)
-				game.TroopMaxID++
-				game.Troops[game.TroopMaxID] = &troop{
-					ID:      game.TroopMaxID,
-					Faction: playerFaction,
-					Cyborg:  cyborg,
-					Src:     f.ID,
-					Dst:     t.ID,
-					Turns:   game.Path[f.ID].Dist[path[0]],
+				if t.Faction == opponentFaction {
+					action += fmt.Sprintf("MSG Attak!; ")
 				}
+				action += fmt.Sprintf("MOVE %d %d %d; ", f.ID, path[0], cyborg)
+				// Improve shot.
+				game.Factories[path[0]].Troops.Player += cyborg
 				f.Cyborg -= cyborg
 				break
 			}
