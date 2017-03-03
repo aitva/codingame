@@ -27,7 +27,7 @@ type factory struct {
 }
 
 func (f *factory) String() string {
-	return fmt.Sprintf("{ID: %d, Cyborg: %d}", f.ID, f.Cyborg)
+	return fmt.Sprintf("{ID: %d, Fa: %d}", f.ID, f.Faction)
 }
 
 type troop struct {
@@ -47,16 +47,23 @@ type path struct {
 
 type Game struct {
 	Board [][]int
-	Bomb  struct {
+
+	FactoryCount int
+	Factories    map[int]*factory
+	NeutralF     []*factory
+	OpponentF    []*factory
+	PlayerF      []*factory
+
+	TroopMaxID int
+	Troops     map[int]*troop
+
+	Bomb struct {
 		Count int
 		Timer int
 	}
-	FactoryCount int
-	Factories    map[int]*factory
-	TroopMaxID   int
-	Troops       map[int]*troop
-	Turn         int
-	Path         []path
+
+	Turn int
+	Path []path
 }
 
 func (g *Game) String() string {
@@ -68,14 +75,6 @@ func (g *Game) String() string {
 		str += "\n"
 	}
 	return str
-}
-
-func (g *Game) getDistance(srcID, dstID int) int {
-	return g.Board[srcID][dstID]
-}
-
-func (g *Game) getDistances(ID int) []int {
-	return g.Board[ID]
 }
 
 func new2DSlice(n, m int) [][]int {
@@ -106,7 +105,6 @@ func dijkstra(src int) (dist, prev []int) {
 		}
 		delete(unvisited, min)
 
-		// fmt.Fprintln(os.Stderr, "min:", min)
 		for v := range game.Board[min] {
 			alt := dist[min] + game.Board[min][v]
 			if alt < dist[v] {
@@ -143,27 +141,6 @@ func sortIndex(dist []int) []int {
 		}
 	}
 	return ids
-}
-
-// searchTroopDst return the index of a faction shooting on id.
-func searchTroopDst(id, faction int) int {
-	for _, t := range game.Troops {
-		if t.Faction == faction && t.Dst == id {
-			return t.ID
-		}
-	}
-	return -1
-}
-
-func searchTroop(src, dst int) int {
-	s := game.Factories[src]
-	d := game.Factories[dst]
-	for _, t := range game.Troops {
-		if t.Src == s.ID && t.Dst == d.ID {
-			return t.ID
-		}
-	}
-	return -1
 }
 
 // upateCyborgs compute number of cyborgs in all factories
@@ -215,34 +192,6 @@ func searchBestShots(src *factory) []*factory {
 	return targets
 }
 
-func computeTroopSize(path []int, src *factory) int {
-	cyborg := 0
-	for _, id := range path {
-		dst := game.Factories[id]
-		// We don't add unit to take our own faction.
-		if dst.Faction == playerFaction {
-			continue
-		}
-		// Minimum amount for neutralFaction.
-		tmp := dst.Cyborg + 1
-		if tmp < 0 {
-			// Might be negative if ennemy troops are moving.
-			tmp = (tmp - 2) * -1
-		}
-		if dst.Faction == opponentFaction {
-			// TODO: use dijkstra instead
-			turns := game.getDistance(src.ID, dst.ID)
-			tmp += turns * dst.Prod
-		}
-		if src.Cyborg-cyborg-tmp <= 0 {
-			cyborg = src.Cyborg - 1
-			break
-		}
-		cyborg += tmp
-	}
-	return cyborg
-}
-
 func main() {
 	// factoryCount: the number of factories
 	var factoryCount int
@@ -269,11 +218,6 @@ func main() {
 		game.Path[i].Dist = dist
 		game.Path[i].Prev = prev
 		game.Path[i].Closest = sortIndex(dist)
-		// p := game.Path[i]
-		// fmt.Fprintln(os.Stderr, "id:", i)
-		// fmt.Fprintln(os.Stderr, "p.Dist:", dist)
-		// fmt.Fprintln(os.Stderr, "p.Prev:", prev)
-		// fmt.Fprintln(os.Stderr, "p.Closest:", p.Closest)
 	}
 
 	for {
@@ -285,13 +229,13 @@ func main() {
 		game.Troops = make(map[int]*troop)
 		game.Factories = make(map[int]*factory)
 		for i := 0; i < entityCount; i++ {
-			var entityId int
+			var entityID int
 			var entityType string
 			var arg1, arg2, arg3, arg4, arg5 int
-			fmt.Scan(&entityId, &entityType, &arg1, &arg2, &arg3, &arg4, &arg5)
+			fmt.Scan(&entityID, &entityType, &arg1, &arg2, &arg3, &arg4, &arg5)
 			if entityType == "TROOP" {
 				t := &troop{
-					ID:      entityId,
+					ID:      entityID,
 					Faction: arg1,
 					Src:     arg2,
 					Dst:     arg3,
@@ -302,38 +246,43 @@ func main() {
 				game.TroopMaxID = t.ID
 			} else if entityType == "FACTORY" {
 				f := &factory{
-					ID:      entityId,
+					ID:      entityID,
 					Faction: arg1,
 					Cyborg:  arg2,
 					Prod:    arg3,
 				}
 				game.Factories[f.ID] = f
+				if f.Faction == neutralFaction {
+					game.NeutralF = append(game.NeutralF, f)
+				} else if f.Faction == playerFaction {
+					game.PlayerF = append(game.PlayerF, f)
+				} else if f.Faction == opponentFaction {
+					game.OpponentF = append(game.OpponentF, f)
+				}
 			}
 		}
 
 		action := ""
+		// Throw bomb one at a time.
 		if game.Bomb.Timer <= 0 && game.Bomb.Count > 0 {
-			target := -1
-			for id, f := range game.Factories {
-				found := target == -1
-				found = found || f.Prod > game.Factories[target].Prod
-				found = found && f.Faction == opponentFaction
-				if found {
-					target = id
+			var target *factory
+			for _, f := range game.OpponentF {
+				if target == nil || f.Prod > target.Prod {
+					target = f
 				}
 			}
-			row := game.Board[target]
-			factory := -1
+			row := game.Board[target.ID]
+			closest := -1
 			for i := range row {
-				found := factory == -1
-				found = found || row[i] < row[factory]
+				found := closest == -1
+				found = found || row[i] < row[closest]
 				found = found && game.Factories[i].Faction == playerFaction
 				if found {
-					factory = i
+					closest = i
 				}
 			}
-			game.Bomb.Timer = bombTime + row[factory]
-			action = fmt.Sprintf("BOMB %d %d; ", factory, target)
+			game.Bomb.Timer = bombTime + row[closest]
+			action = fmt.Sprintf("BOMB %d %d; ", closest, target.ID)
 			game.Bomb.Count--
 		}
 		for _, f := range game.Factories {
@@ -344,14 +293,15 @@ func main() {
 			if f.Cyborg <= 0 {
 				continue
 			}
-			if f.Cyborg > 15 && f.Prod >= 1 && f.Prod < 3 {
+			if len(game.NeutralF) == 0 && f.Cyborg > 15 && f.Prod >= 1 && f.Prod < 3 {
 				action += fmt.Sprintf("INC %d; ", f.ID)
 				continue
 			}
 
 			// Choose an action.
 			targets := searchBestShots(f)
-			// fmt.Fprintln(os.Stderr, "f:", f, "targets:", targets)
+			fmt.Fprintln(os.Stderr, "f:", f, "targets:", targets)
+			fmt.Fprintln(os.Stderr, "dist:", game.Path[f.ID].Dist)
 			for _, t := range targets {
 				if t.ID == f.ID {
 					continue
@@ -361,7 +311,7 @@ func main() {
 				// fmt.Fprintln(os.Stderr, "path:", path)
 				// cyborg := computeTroopSize(path, f)
 				cyborg := f.Cyborg
-				// fmt.Fprintf(os.Stderr, "f: %v; t: %v; cyborg: %d\n", f, t, cyborg)
+				fmt.Fprintf(os.Stderr, "- t: %v; cyborg: %d\n", t, cyborg)
 				if cyborg == 0 {
 					continue
 				}
