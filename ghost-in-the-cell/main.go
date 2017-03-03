@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"time"
 )
 
 const (
@@ -276,6 +277,7 @@ func main() {
 	}
 
 	for {
+		tstart := time.Now()
 		// entityCount: the number of entities (e.g. factories and troops)
 		var entityCount int
 		fmt.Scan(&entityCount)
@@ -349,17 +351,17 @@ func main() {
 
 			// Choose an action.
 			targets := searchBestShots(f)
-			fmt.Fprintln(os.Stderr, "f:", f, "targets:", targets)
+			// fmt.Fprintln(os.Stderr, "f:", f, "targets:", targets)
 			for _, t := range targets {
 				if t.ID == f.ID {
 					continue
 				}
 				// fmt.Fprintln(os.Stderr, "prev:", game.Path[f.ID].Prev, "t.ID:", t.ID)
 				path := pathToDst(game.Path[f.ID].Prev, t.ID)
-				fmt.Fprintln(os.Stderr, "path:", path)
+				// fmt.Fprintln(os.Stderr, "path:", path)
 				// cyborg := computeTroopSize(path, f)
 				cyborg := f.Cyborg
-				fmt.Fprintf(os.Stderr, "f: %v; t: %v; cyborg: %d\n", f, t, cyborg)
+				// fmt.Fprintf(os.Stderr, "f: %v; t: %v; cyborg: %d\n", f, t, cyborg)
 				if cyborg == 0 {
 					continue
 				}
@@ -387,5 +389,6 @@ func main() {
 		fmt.Println(action)
 		game.Turn++
 		game.Bomb.Timer--
+		fmt.Fprintln(os.Stderr, "time:", time.Since(tstart))
 	}
 }
