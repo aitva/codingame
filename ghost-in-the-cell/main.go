@@ -30,7 +30,7 @@ type factory struct {
 }
 
 func (f *factory) String() string {
-	return fmt.Sprintf("{ID: %d, Fa: %d, Cy: %d}", f.ID, f.Faction, f.Cyborg)
+	return fmt.Sprintf("{ID: %d, Cy: %d, Es: %d}", f.ID, f.Cyborg, f.EstimatedCyborg())
 }
 
 func (f *factory) EstimatedCyborg() int {
@@ -48,6 +48,10 @@ type troop struct {
 	Src     int
 	Dst     int
 	Turns   int
+}
+
+func (t *troop) String() string {
+	return fmt.Sprintf("{Turns: %d}", t.Turns)
 }
 
 type path struct {
@@ -167,6 +171,23 @@ func upateTroops() {
 	}
 }
 
+func searchClosestTroops(src *factory) []*troop {
+	var troops []*troop
+	for _, t := range game.Troops {
+		if src.ID == t.Dst && t.Faction == opponentFaction {
+			troops = append(troops, t)
+		}
+	}
+	for i := range troops {
+		for j := range troops[i:] {
+			if troops[i].Turns < troops[j].Turns {
+				troops[i], troops[j] = troops[j], troops[i]
+			}
+		}
+	}
+	return troops
+}
+
 func searchBestShots(src *factory) []*factory {
 	// Get target factories.
 	targets := make([]*factory, 0, game.FactoryCount)
@@ -179,6 +200,12 @@ func searchBestShots(src *factory) []*factory {
 
 	for _, f := range game.PlayerF {
 		if f.Prod < 1 || f.EstimatedCyborg() >= 0 {
+			continue
+		}
+		// compute NB tour before impact.
+		closest := searchClosestTroops(f)
+		fmt.Fprintln(os.Stderr, closest)
+		if f.Prod*closest[0].Turns+f.Cyborg >= closest[0].Cyborg {
 			continue
 		}
 		targets = append(targets, f)
@@ -314,7 +341,7 @@ func main() {
 			// Choose an action.
 			targets := searchBestShots(f)
 			fmt.Fprintln(os.Stderr, "f:", f, "targets:", targets)
-			fmt.Fprintln(os.Stderr, "dist:", game.Path[f.ID].Dist)
+			//fmt.Fprintln(os.Stderr, "dist:", game.Path[f.ID].Dist)
 			for _, t := range targets {
 				if t.ID == f.ID {
 					continue
@@ -322,7 +349,6 @@ func main() {
 				// fmt.Fprintln(os.Stderr, "prev:", game.Path[f.ID].Prev, "t.ID:", t.ID)
 				path := pathToDst(game.Path[f.ID].Prev, t.ID)
 				// fmt.Fprintln(os.Stderr, "path:", path)
-				// cyborg := computeTroopSize(path, f)
 				cyborg := f.Cyborg
 				fmt.Fprintf(os.Stderr, "- t: %v; cyborg: %d\n", t, cyborg)
 				if cyborg == 0 {
